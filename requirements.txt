@@ -1,0 +1,15 @@
+# ==========================================
+# APY Micro-Framework Dependencies
+# ==========================================
+
+# Core ORM and reflection engine
+SQLAlchemy>=2.0.0
+greenlet>=3.0.0
+
+# Recommended database drivers:
+# MySQL / MariaDB support
+pymysql>=1.1.0
+cryptography>=42.0.0
+
+# PostgreSQL support
+psycopg2-binary>=2.9.9
