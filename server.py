@@ -593,17 +593,22 @@ class Server():
     # SE ENCARGA DE TOMAR LA URL DEL METODO QUE DEBE SER LLAMADO
     def get_url(self, params):
         try:
-            params = params[0].split("\n")
-            url = params[0].split(" ")
-            suburl = url[1][1:]
+            if not params or not params[0]:
+                return ["", ""]
+            lines = params[0].split("\n")
+            if not lines or not lines[0]:
+                return ["", ""]
+            url_parts = lines[0].strip().split(" ")
+            if len(url_parts) < 2:
+                return ["", ""]
+            suburl = url_parts[1].lstrip("/")
             if "?" not in suburl:
                 suburl = [suburl, ""]
             else:
-                suburl = suburl.split("?")
+                suburl = suburl.split("?", 1)
             return suburl
         except Exception as err:
-            print(err)
-            return ""
+            return ["", ""]
 
     # SE ENCARGA DE ENSAMBLAR LAS PETICIONES QUE CONSTAN DE MAS DE UN MENSAJE,
     # LAS DE UN SOLO MENSAJE LAS PASA COMO LISTA
