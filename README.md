@@ -20,7 +20,8 @@
 [Instalación y despliegue rápido](#-instalación-y-despliegue-rápido) •
 [Guía de uso](#-guía-de-uso) •
 [Equipo de investigación](#-equipo-de-investigación-y-colaboradores) •
-[Licencia](#-licencia)
+[Licencia](#-licencia) •
+[Cómo citar](#-cómo-citar)
 
 </div>
 
@@ -249,3 +250,27 @@ Este proyecto es el resultado del trabajo de investigación y desarrollo cientí
 ## 📄 Licencia
 
 Este proyecto se distribuye bajo los términos de la **Licencia MIT**. Consulta el archivo [LICENSE](LICENSE) para mayores detalles sobre permisos de uso, distribución y modificación en entornos académicos y comerciales.
+
+---
+
+## 📚 Cómo citar
+
+Si utilizas este proyecto, su arquitectura o los datos de rendimiento en investigaciones, tesis o artículos científicos, por favor cita este trabajo mediante cualquiera de los siguientes formatos:
+
+### Formato APA (7.ª edición)
+
+> Hernández Sinsel, J. E., Ayala Zúñiga, H. G., Figueroa Pérez, J. F., Becerra Urquídez, R. J., & Martínez Ramírez, Y. (2025). *Micro-framework web para la creación de APIs RESTful de alto rendimiento en Python* [Tesis de licenciatura, Facultad de Ingeniería Mochis, Universidad Autónoma de Sinaloa]. GitHub: https://github.com/tesisDrHerman/MicroFrameworkAPY
+
+### Formato BibTeX
+
+```bibtex
+@software{hernandez2025apy,
+  author       = {Hern{\'a}ndez Sinsel, Jes{\'u}s Emmanuel and Ayala Z{\'u}{\~n}iga, Herman Geovany and Figueroa P{\'e}rez, Juan Francisco and Becerra Urqu{\'i}dez, Roc{\'i}o Jacqueline and Mart{\'i}nez Ram{\'i}rez, Yobani},
+  title        = {{APY: Micro-framework web as{\'i}ncrono de alto rendimiento para la generaci{\'o}n automatizada de APIs RESTful en Python}},
+  year         = {2025},
+  publisher    = {GitHub},
+  version      = {1.0.0},
+  url          = {https://github.com/tesisDrHerman/MicroFrameworkAPY}
+}
+```
+
