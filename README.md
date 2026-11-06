@@ -7,6 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![SQLAlchemy](https://img.shields.io/badge/ORM-SQLAlchemy%202.0-D71F00?logo=sqlalchemy&logoColor=white)](https://www.sqlalchemy.org/)
 [![OpenAPI](https://img.shields.io/badge/OpenAPI-3.0%20%2F%20Swagger-85EA2D?logo=swagger&logoColor=black)](https://swagger.io/)
+[![CI](https://github.com/tesisDrHerman/MicroFrameworkAPY/actions/workflows/ci.yml/badge.svg)](https://github.com/tesisDrHerman/MicroFrameworkAPY/actions/workflows/ci.yml)
 [![UAS FIM](https://img.shields.io/badge/Institución-UAS%20Facultad%20de%20Ingeniería%20Mochis-002F6C)](https://fim.uas.edu.mx/)
 
 <p align="center">
