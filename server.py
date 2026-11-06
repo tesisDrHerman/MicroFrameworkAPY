@@ -267,6 +267,22 @@ class Server():
     ]
     MAX_REQUEST_SIZE = 0.25
 
+    @staticmethod
+    def safe_static_path(base_dir: str, requested_file: str):
+        if not requested_file or "\x00" in requested_file:
+            return None
+        if not os.path.isabs(base_dir):
+            base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), base_dir)
+        base_canonical = os.path.realpath(base_dir)
+        target = os.path.realpath(os.path.join(base_canonical, requested_file))
+        try:
+            common = os.path.commonpath([base_canonical, target])
+            if common == base_canonical and os.path.isfile(target):
+                return target
+        except Exception:
+            return None
+        return None
+
     request_types = ["POST", "GET", "PATCH", "DELETE", "PUT", "OPTIONS", "HEAD"]
     no_ssl = "PGDOH"
 
@@ -407,7 +423,8 @@ class Server():
                     rtype, params = self.request_constructor(data_dict['addr'][1], raw)
                     if params != None:
                         suburl = self.get_url(params)
-                        if suburl[0] not in self.__METHODS.page_urls and not os.path.isfile("htdocs/" + suburl[0]):
+                        safe_file = self.safe_static_path("htdocs", suburl[0])
+                        if suburl[0] not in self.__METHODS.page_urls and not safe_file:
                             run, status = self.handle_request(rtype, suburl, params)
                             if run == "OPTIONS":
                                 print(rtype, "REQUEST ACCEPED FROM", data_dict['addr'], "- STATUS:",
@@ -422,18 +439,24 @@ class Server():
                                       status[0].decode("utf-8"), "ERROR -", run)
                         else:
                             url = suburl[0]
-                            if os.path.isfile("htdocs/" + url):
-                                content = open("htdocs/" + url).read()
-                                self.senderHtml(sock, content, self.status_codes.http_201())
+                            if safe_file:
+                                is_binary = safe_file.endswith((".ico", ".png", ".jpg", ".jpeg"))
+                                mode = "rb" if is_binary else "r"
+                                encoding = None if is_binary else "utf-8"
+                                with open(safe_file, mode, encoding=encoding, errors=None if is_binary else "replace") as f:
+                                    content = f.read()
+                                self.senderHtml(sock, content, self.status_codes.http_200())
                             elif url in self.router.page_urls:
-                                content = None
-                                if url == "favicon.ico":
-                                    #content = open("htdocs/" + self.router.page_urls[url], encoding="utf-8").read()
-                                    with open("htdocs/" + self.router.page_urls[url], 'rb') as file:
+                                page_safe = self.safe_static_path("htdocs", self.router.page_urls[url])
+                                if page_safe:
+                                    is_binary = page_safe.endswith((".ico", ".png", ".jpg", ".jpeg"))
+                                    mode = "rb" if is_binary else "r"
+                                    encoding = None if is_binary else "utf-8"
+                                    with open(page_safe, mode, encoding=encoding, errors=None if is_binary else "replace") as file:
                                         content = file.read()
+                                    self.senderHtml(sock, content, self.status_codes.http_200())
                                 else:
-                                    content = open("htdocs/" + self.router.page_urls[url]).read()
-                                self.senderHtml(sock, content, self.status_codes.http_201())
+                                    self.senderHtml(sock, '', self.status_codes.http_404())
                             else:
                                 self.senderHtml(sock, '', self.status_codes.http_404())
                         self.sel.unregister(sock)
