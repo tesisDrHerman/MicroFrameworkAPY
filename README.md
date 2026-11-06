@@ -56,7 +56,7 @@ flowchart TD
     Client["🌐 Cliente HTTP / SPA / móvil"] -->|Petición TCP / HTTP 1.1 Keep-Alive| Layer1["1. Capa de red y transporte\n(server.py / Selectors Socket Server)"]
     Layer1 -->|Pipeline de interceptores| Middleware["2. Canalización de Middleware\n(BaseMiddleware.process_request)"]
     Middleware -->|Petición autorizada / procesada| Layer2["3. Capa de enrutamiento y despacho\n(router.py / URL Dynamic Dispatcher)"]
-    Layer2 -->|Ruta dinámica decorada /recurso/{id}| Handlers["Controladores de usuario / decoradores @router"]
+    Layer2 -->|Ruta dinámica decorada /recurso/:id| Handlers["Controladores de usuario / decoradores @router"]
     Layer2 -->|Ruta autogenerada por esquema| Layer3["4. Motor de reflexión y generador CRUD\n(generator.py / SQLAlchemy 2.0 ORM)"]
     Layer3 -->|Inspección y consultas SQL| DB[("🗄️ Base de datos relacional\n(SQLite / MySQL / PostgreSQL / Oracle / MSSQL)")]
     Layer2 -->|Petición a /docs o /swagger.json| Layer4["5. Documentación interactiva OpenAPI 3.0.3\n(swagger.py / Swagger UI)"]
