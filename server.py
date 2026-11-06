@@ -1,3 +1,20 @@
+# Adaptador JSON con aceleracion automatica (fallback a stdlib json)
+try:
+    import orjson
+    def json_dumps(data) -> str:
+        return orjson.dumps(data).decode('utf-8')
+    def json_loads(data):
+        return orjson.loads(data)
+except ImportError:
+    try:
+        import ujson as fast_json
+        json_dumps = fast_json.dumps
+        json_loads = fast_json.loads
+    except ImportError:
+        import json as std_json
+        json_dumps = std_json.dumps
+        json_loads = std_json.loads
+
 import json
 import os.path
 import socket
@@ -293,25 +310,28 @@ class Server():
         print("Initialized server on " + HOST + ":" + str(PORT))
 
     # SE ENCARGA DE ENVIAR LA RESPUESTA AL CLIENTE
-    def sender(self, s: socket, body: str, status: []):
+    def sender(self, s: socket, body: str, status: [], keep_alive: bool = False):
         try:
-            body_raw = json.dumps(body)
+            body_raw = json_dumps(body)
+            raw_bytes = body_raw.encode('utf-8') if isinstance(body_raw, str) else body_raw
             headers = {
                 'Content-Type': 'application/json; charset=UTF-8',
-                'Content-Length': len(body_raw),
-                'Connection': 'close',
+                'Content-Length': len(raw_bytes),
+                'Connection': 'keep-alive' if keep_alive else 'close',
                 "Access-Control-Allow-Origin": "*",
                 "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
                 "Access-Control-Allow-Headers": "Content-Type, Authorization",
                 "Access-Control-Max-Age": "86400"
             }
+            if keep_alive:
+                headers['Keep-Alive'] = 'timeout=5, max=1000'
             headers_raw = '\r\n'.join('%s: %s' % (k, v) for k, v in headers.items()) + '\r\n\r\n'
             response_proto = b'HTTP/1.1'
             response_status = status[0]
             response_status_text = status[1]
             s.send(b'%s %s %s\r\n' % (response_proto, response_status, response_status_text))
             s.send(bytes(headers_raw, 'utf-8'))
-            s.send(bytes(body_raw, 'utf-8'))
+            s.send(raw_bytes)
         except Exception as err:
             print("SENDER ERROR:", err)
 
@@ -417,6 +437,16 @@ class Server():
                 str_recv_data = str(recv_data, 'UTF8')
                 raw = str_recv_data.split("\r\n\r\n")
                 if (str_recv_data != ''):
+                    # Deteccion de soporte Keep-Alive
+                    keep_alive = False
+                    lower_data = str_recv_data.lower()
+                    if "connection: keep-alive" in lower_data:
+                        keep_alive = True
+                    elif "connection: close" in lower_data:
+                        keep_alive = False
+                    else:
+                        keep_alive = "http/1.1" in lower_data
+
                     rtype, params = self.request_constructor(data_dict['addr'][1], raw)
                     if params != None:
                         suburl = self.get_url(params)
@@ -430,7 +460,7 @@ class Server():
                             if status not in self.error_status:
                                 print(rtype, "REQUEST ACCEPED FROM", data_dict['addr'], "- STATUS:",
                                       status[0].decode("utf-8"), status[1].decode("utf-8"))
-                                self.sender(sock, run, status)
+                                self.sender(sock, run, status, keep_alive=keep_alive)
                             else:
                                 print(rtype, "REQUEST FAILED FROM", data_dict['addr'], "- STATUS",
                                       status[0].decode("utf-8"), "ERROR -", run)
@@ -456,8 +486,9 @@ class Server():
                                     self.senderHtml(sock, '', self.status_codes.http_404())
                             else:
                                 self.senderHtml(sock, '', self.status_codes.http_404())
-                        self.sel.unregister(sock)
-                        sock.close()
+                        if not keep_alive:
+                            self.sel.unregister(sock)
+                            sock.close()
                         return
                 if recv_data:
                     data.outb += recv_data
@@ -496,14 +527,14 @@ class Server():
                     return run, status
                 if rtype == "POST":
                     params[1] = params[1].replace("\n", '')
-                    request = json.loads(params[1])
+                    request = json_loads(params[1])
                     if suburl[0] not in self.__METHODS.post_methods:
                         return "'" + suburl[0] + "' Not found", self.status_codes.http_404()
                     run, status = self.__METHODS.post_methods[suburl[0]](request)
                     return run, status
                 if rtype == "PUT":
                     params[1] = params[1].replace("\n", '')
-                    request = json.loads(params[1])
+                    request = json_loads(params[1])
                     args = self.url_paramters(params=suburl[1],
                                               function=self.__METHODS.put_methods[suburl[0]],
                                               request=params[1],
@@ -529,7 +560,7 @@ class Server():
                     return run, status
                 if rtype == "PATCH":
                     params[1] = params[1].replace("\n", '')
-                    request = json.loads(params[1])
+                    request = json_loads(params[1])
                     args = self.url_paramters(params=suburl[1],
                                               function=self.__METHODS.patch_methods[suburl[0]],
                                               request=params[1],
@@ -546,43 +577,32 @@ class Server():
 
     def url_paramters(self, params: str, function, meta, request: str = ""):
         try:
-            method_params = params.split("&")
-            params = []
-            for i in range(len(method_params)):
-                temp = method_params[i].split("=")
-                params.append([meta[i]['name'], temp[1]])
+            from urllib.parse import parse_qs, unquote
+            parsed_query = parse_qs(params, keep_blank_values=True)
             data = {}
             for arg in meta:
                 arg_name = str(arg['name'])
                 arg_type = str(arg['type'])
-                p = -1
-                for j in range(len(params)):
-                    if params[j][0] == arg_name:
-                        p = j
-                        break
-                if p == -1:
-                    data[arg_name] = json.loads(request)
-                if 'str' in arg_type:
-                    params[p][1] = params[p][1].replace("'", '')
-                    data[arg_name] = str(params[p][1])
-                if 'int' in arg_type:
-                    data[arg_name] = int(params[p][1])
-                if 'float' in arg_type:
-                    data[arg_name] = float(params[p][1])
-                if 'bool' in arg_type:
-                    data[arg_name] = bool(params[p][1])
-                if 'list' in arg_type:
-                    t = []
-                if 'tuple' in arg_type:
-                    t = ()
-                if 'dict' in arg_type:
-                    t = {}
-                if 'bytes' in arg_type:
-                    t = b''
-                if 'inspect._empty' in arg_type:
-                    params[p][1] = params[p][1].replace('"', '')
-                    params[p][1] = params[p][1].replace("'", '')
-                    data[arg_name] = self.guess_type(params[p][1])
+                if arg_name in parsed_query:
+                    raw_val = parsed_query[arg_name][0]
+                    if 'int' in arg_type:
+                        data[arg_name] = int(raw_val)
+                    elif 'float' in arg_type:
+                        data[arg_name] = float(raw_val)
+                    elif 'bool' in arg_type:
+                        data[arg_name] = raw_val.lower() in ('true', '1', 'yes', 't')
+                    elif 'str' in arg_type:
+                        data[arg_name] = unquote(raw_val).replace("'", "")
+                    else:
+                        data[arg_name] = self.guess_type(raw_val)
+                else:
+                    if request and request != "":
+                        try:
+                            data[arg_name] = json_loads(request)
+                        except Exception:
+                            data[arg_name] = None
+                    else:
+                        data[arg_name] = None
             return data
         except Exception as err:
             return None

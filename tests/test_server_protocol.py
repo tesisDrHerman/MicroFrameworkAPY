@@ -87,6 +87,43 @@ class TestServerProtocol(unittest.TestCase):
         # Debe contener doble CRLF antes del body
         self.assertIn(b"\r\n\r\n", sock.buffer)
 
+    def test_sender_keep_alive_headers(self):
+        """Verifica que el modo keep-alive agregue cabeceras Connection y Keep-Alive correspondientes."""
+        class MockSocket:
+            def __init__(self):
+                self.buffer = b""
+            def send(self, data):
+                self.buffer += data
+
+        sock = MockSocket()
+        self.server.sender(sock, {"status": "ok"}, self.status.http_200(), keep_alive=True)
+
+        self.assertIn(b"Connection: keep-alive\r\n", sock.buffer)
+        self.assertIn(b"Keep-Alive: timeout=5, max=1000\r\n", sock.buffer)
+
+    def test_url_parameters_named_mapping_arbitrary_order(self):
+        """Verifica que url_paramters asigne parametros por nombre sin importar el orden en la query."""
+        meta = [
+            {"name": "id", "type": int},
+            {"name": "nombre", "type": str},
+            {"name": "activo", "type": bool}
+        ]
+        query_string = "activo=true&id=42&nombre=Carlos%20Ayala"
+        result = self.server.url_paramters(params=query_string, function=None, meta=meta)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["id"], 42)
+        self.assertEqual(result["nombre"], "Carlos Ayala")
+        self.assertEqual(result["activo"], True)
+
+    def test_fast_json_roundtrip(self):
+        """Verifica la serializacion y deserializacion rapida de JSON."""
+        from server import json_dumps, json_loads
+        data = {"clave": "valor", "numero": 123, "lista": [1, 2, 3]}
+        encoded = json_dumps(data)
+        decoded = json_loads(encoded)
+        self.assertEqual(data, decoded)
+
 
 if __name__ == "__main__":
     unittest.main()
