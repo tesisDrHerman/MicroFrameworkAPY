@@ -60,23 +60,21 @@ class Http_status:
 
 
 class Router:
-    prefix = None
-    overall_prefix = None
-    get_methods = {}
-    get_methods_meta = {}
-    post_methods = {}
-    post_methods_meta = {}
-    put_methods = {}
-    put_methods_meta = {}
-    delete_methods = {}
-    delete_methods_meta = {}
-    patch_methods = {}
-    patch_methods_meta = {}
-    page_urls = {}
-    api_details = []
-
     def __init__(self, prefix: str = None):
         self.prefix = prefix
+        self.overall_prefix = None
+        self.get_methods = {}
+        self.get_methods_meta = {}
+        self.post_methods = {}
+        self.post_methods_meta = {}
+        self.put_methods = {}
+        self.put_methods_meta = {}
+        self.delete_methods = {}
+        self.delete_methods_meta = {}
+        self.patch_methods = {}
+        self.patch_methods_meta = {}
+        self.page_urls = {}
+        self.api_details = []
 
     def swagger_generator(self, method_type: str, metadata, url: str, table: str, fields: list = [],):
         if self.prefix:
