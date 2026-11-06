@@ -76,6 +76,21 @@ class Http_status:
         return b"".join(status_code), b"".join(status_text)
 
 
+class BaseMiddleware:
+    """Clase base extensible para implementar middlewares en APY Framework."""
+
+    def process_request(self, rtype: str, suburl: list, params: list):
+        """
+        Procesa la peticion antes de llamar al controlador.
+        Si retorna una tupla (body, status), interrumpe el ciclo y responde de inmediato.
+        """
+        return None
+
+    def process_response(self, rtype: str, suburl: list, run, status):
+        """Procesa o modifica la respuesta antes de ser enviada al cliente."""
+        return run, status
+
+
 class Router:
     def __init__(self, prefix: str = None):
         self.prefix = prefix
@@ -92,6 +107,58 @@ class Router:
         self.patch_methods_meta = {}
         self.page_urls = {}
         self.api_details = []
+        self.dynamic_routes = {
+            "GET": [],
+            "POST": [],
+            "PUT": [],
+            "DELETE": [],
+            "PATCH": []
+        }
+
+    def _register_dynamic(self, method: str, url: str, function, meta):
+        if "{" in url and "}" in url:
+            import re
+            pattern = re.sub(r'\{([a-zA-Z0-9_]+)\}', r'(?P<\1>[^/]+)', url)
+            compiled = re.compile(f"^{pattern}$")
+            self.dynamic_routes[method].append((compiled, function, meta))
+
+    def match_dynamic_route(self, method: str, path: str):
+        routes = self.dynamic_routes.get(method, [])
+        for pattern, fn, meta in routes:
+            m = pattern.match(path)
+            if m:
+                return fn, meta, m.groupdict()
+        return None
+
+    def get(self, url: str, meta: dict = None):
+        def decorator(fn):
+            self.add_get(fn, url, meta)
+            return fn
+        return decorator
+
+    def post(self, url: str, meta: dict = None):
+        def decorator(fn):
+            self.add_post(fn, url, meta)
+            return fn
+        return decorator
+
+    def put(self, url: str, meta: dict = None):
+        def decorator(fn):
+            self.add_put(fn, url, meta)
+            return fn
+        return decorator
+
+    def delete(self, url: str, meta: dict = None):
+        def decorator(fn):
+            self.add_delete(fn, url, meta)
+            return fn
+        return decorator
+
+    def patch(self, url: str, meta: dict = None):
+        def decorator(fn):
+            self.add_patch(fn, url, meta)
+            return fn
+        return decorator
 
     def swagger_generator(self, method_type: str, metadata, url: str, table: str, fields: list = [],):
         if self.prefix:
@@ -196,6 +263,8 @@ class Router:
         if self.prefix:
             url = self.prefix + "/" + url
         self.get_methods[url] = function
+        self._register_dynamic('GET', url, function, meta)
+        self._register_dynamic('GET', url, function, meta)
         self.get_methods_meta[url] = meta['recieve']
         self.swagger_generator(method_type="GET", metadata=meta, url=rel_url, table=table)
 
@@ -209,6 +278,8 @@ class Router:
         if self.prefix:
             url = self.prefix + "/" + url
         self.post_methods[url] = function
+        self._register_dynamic('POST', url, function, meta)
+        self._register_dynamic('POST', url, function, meta)
         self.post_methods_meta[url] = meta['recieve']
         self.swagger_generator(method_type="POST", metadata=meta, url=rel_url, table=table)
 
@@ -222,6 +293,8 @@ class Router:
         if self.prefix:
             url = self.prefix + "/" + url
         self.put_methods[url] = function
+        self._register_dynamic('PUT', url, function, meta)
+        self._register_dynamic('PUT', url, function, meta)
         self.put_methods_meta[url] = meta['recieve']
         self.swagger_generator(method_type="PUT", metadata=meta, url=rel_url, table=table)
 
@@ -235,6 +308,8 @@ class Router:
         if self.prefix:
             url = self.prefix + "/" + url
         self.delete_methods[url] = function
+        self._register_dynamic('DELETE', url, function, meta)
+        self._register_dynamic('DELETE', url, function, meta)
         self.delete_methods_meta[url] = meta['recieve']
         self.swagger_generator(method_type="DELETE", metadata=meta, url=rel_url, table=table)
 
@@ -248,6 +323,8 @@ class Router:
         if self.prefix:
             url = self.prefix + "/" + url
         self.patch_methods[url] = function
+        self._register_dynamic('PATCH', url, function, meta)
+        self._register_dynamic('PATCH', url, function, meta)
         self.patch_methods_meta[url] = meta['recieve']
         self.swagger_generator(method_type="PATCH", metadata=meta, url=rel_url, table=table)
 
@@ -259,11 +336,18 @@ class Router:
     def add_router(self, router):
         if router is not None:
             self.get_methods.update(router.get_methods)
+            self.get_methods_meta.update(router.get_methods_meta)
             self.post_methods.update(router.post_methods)
+            self.post_methods_meta.update(router.post_methods_meta)
             self.put_methods.update(router.put_methods)
+            self.put_methods_meta.update(router.put_methods_meta)
             self.delete_methods.update(router.delete_methods)
+            self.delete_methods_meta.update(router.delete_methods_meta)
             self.patch_methods.update(router.patch_methods)
+            self.patch_methods_meta.update(router.patch_methods_meta)
             self.page_urls.update(router.page_urls)
+            for m in self.dynamic_routes:
+                self.dynamic_routes[m].extend(router.dynamic_routes.get(m, []))
 
 
 class Server():
@@ -307,7 +391,11 @@ class Server():
         self.__HOST = HOST
         self.__PORT = PORT
         self.__SHOW_URLS = SHOW_URLS
+        self.middlewares = []
         print("Initialized server on " + HOST + ":" + str(PORT))
+
+    def add_middleware(self, middleware: BaseMiddleware):
+        self.middlewares.append(middleware)
 
     # SE ENCARGA DE ENVIAR LA RESPUESTA AL CLIENTE
     def sender(self, s: socket, body: str, status: [], keep_alive: bool = False):
@@ -507,6 +595,10 @@ class Server():
         status = None
         if params[0][:7] == "OPTIONS":
             rtype = "OPTIONS"
+        for mw in self.middlewares:
+            early = mw.process_request(rtype, suburl, params)
+            if early is not None:
+                return early[0], early[1]
         try:
             if suburl[0] == self.__DOCS_URL:
                 return open(suburl[0]).read(), self.status_codes.http_201(), 0
@@ -515,15 +607,31 @@ class Server():
             # AGREGAR CAPACIDAD PARA INCLUIR CUALQUIER HTML
             if len(suburl[0]) > 1:
                 if rtype == "GET":
-                    args = self.url_paramters(params=suburl[1],
-                                              function=self.__METHODS.get_methods[suburl[0]],
-                                              meta=self.__METHODS.get_methods_meta[suburl[0]])
-                    if args == None:
-                        run, status = self.__METHODS.get_methods[suburl[0]]()
+                    handler = None
+                    meta = None
+                    path_params = {}
+                    if suburl[0] in self.__METHODS.get_methods:
+                        handler = self.__METHODS.get_methods[suburl[0]]
+                        meta = self.__METHODS.get_methods_meta.get(suburl[0], [])
                     else:
-                        run, status = self.__METHODS.get_methods[suburl[0]](**args)
+                        matched = self.__METHODS.match_dynamic_route("GET", suburl[0])
+                        if matched:
+                            handler, meta, path_params = matched
+                    if handler is None:
+                        return "Not found", self.status_codes.http_404()
+
+                    args = self.url_paramters(params=suburl[1], function=handler, meta=meta or [])
+                    if args is None:
+                        args = {}
+                    args.update(path_params)
+                    if not args:
+                        run, status = handler()
+                    else:
+                        run, status = handler(**args)
                     if run == None:
                         return "Not found", self.status_codes.http_404()
+                    for mw in reversed(self.middlewares):
+                        run, status = mw.process_response(rtype, suburl, run, status)
                     return run, status
                 if rtype == "POST":
                     params[1] = params[1].replace("\n", '')
