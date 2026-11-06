@@ -297,59 +297,56 @@ class Server():
         try:
             body_raw = json.dumps(body)
             headers = {
-                'Content-type': 'application/json; charset=UTF-8',
-                'content-length': len(body_raw),
-                'connection': 'close',
+                'Content-Type': 'application/json; charset=UTF-8',
+                'Content-Length': len(body_raw),
+                'Connection': 'close',
                 "Access-Control-Allow-Origin": "*",
                 "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
                 "Access-Control-Allow-Headers": "Content-Type, Authorization",
-                "Access-Control-Allow-Credentials": "true",
                 "Access-Control-Max-Age": "86400"
             }
-            headers_raw = ''.join('%s: %s\n' % (k, v) for k, v in headers.items())
+            headers_raw = '\r\n'.join('%s: %s' % (k, v) for k, v in headers.items()) + '\r\n\r\n'
             response_proto = b'HTTP/1.1'
             response_status = status[0]
             response_status_text = status[1]
-            s.send(b'%s %s %s' % (response_proto, response_status, response_status_text))
-            s.send(b'\n')
+            s.send(b'%s %s %s\r\n' % (response_proto, response_status, response_status_text))
             s.send(bytes(headers_raw, 'utf-8'))
-            s.send(b'\n')
             s.send(bytes(body_raw, 'utf-8'))
         except Exception as err:
-            print(err)
-
+            print("SENDER ERROR:", err)
 
     def sender_options(self, s: socket, status: []):
         try:
             headers = {
-                'Content-type': 'application/json; charset=UTF-8',
-                'connection': 'close',
+                'Content-Type': 'application/json; charset=UTF-8',
+                'Content-Length': '0',
+                'Connection': 'close',
+                "Access-Control-Allow-Origin": "*",
                 "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
                 "Access-Control-Allow-Headers": "Content-Type, Authorization",
-                "Access-Control-Allow-Credentials": "true",
                 "Access-Control-Max-Age": "86400"
             }
-            headers_raw = ''.join('%s: %s\n' % (k, v) for k, v in headers.items())
+            headers_raw = '\r\n'.join('%s: %s' % (k, v) for k, v in headers.items()) + '\r\n\r\n'
             response_proto = b'HTTP/1.1'
             response_status = status[0]
             response_status_text = status[1]
-            s.send(b'%s %s %s' % (response_proto, response_status, response_status_text))
-            s.send(b'\n')
+            s.send(b'%s %s %s\r\n' % (response_proto, response_status, response_status_text))
             s.send(bytes(headers_raw, 'utf-8'))
         except Exception as err:
-            print(err)
+            print("SENDER OPTIONS ERROR:", err)
 
     def senderHtml(self, s: socket, body, status: []):
         try:
             response_proto = b'HTTP/1.1'
             response_status = status[0]
             response_status_text = status[1]
-            s.send(b'%s %s %s' % (response_proto, response_status, response_status_text))
-            s.send(b'\n\n')
-            s.send(bytes(body, 'utf-8'))
+            s.send(b'%s %s %s\r\n\r\n' % (response_proto, response_status, response_status_text))
+            if isinstance(body, bytes):
+                s.send(body)
+            else:
+                s.send(bytes(str(body), 'utf-8'))
         except Exception as err:
-            print("SENDER HTML ERROR")
-            print(err)
+            print("SENDER HTML ERROR:", err)
 
     # ACCEPTA LAS CONEXIONES A LOS SOCKETS
     def accept_wrapper(self, sock):

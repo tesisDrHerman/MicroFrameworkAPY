@@ -67,6 +67,26 @@ class TestServerProtocol(unittest.TestCase):
         self.assertEqual(self.server.guess_type("False"), False)
         self.assertEqual(self.server.guess_type("texto_plano"), "texto_plano")
 
+    def test_sender_cors_and_crlf_formatting(self):
+        """Verifica que sender formatee cabeceras con CRLF y CORS conforme al estandar."""
+        class MockSocket:
+            def __init__(self):
+                self.buffer = b""
+            def send(self, data):
+                self.buffer += data
+
+        sock = MockSocket()
+        self.server.sender(sock, {"mensaje": "hola"}, self.status.http_200())
+
+        # Debe contener terminadores CRLF
+        self.assertIn(b"HTTP/1.1 200 OK\r\n", sock.buffer)
+        self.assertIn(b"Content-Type: application/json; charset=UTF-8\r\n", sock.buffer)
+        self.assertIn(b"Access-Control-Allow-Origin: *\r\n", sock.buffer)
+        # No debe contener Access-Control-Allow-Credentials cuando el origen es comodin
+        self.assertNotIn(b"Access-Control-Allow-Credentials", sock.buffer)
+        # Debe contener doble CRLF antes del body
+        self.assertIn(b"\r\n\r\n", sock.buffer)
+
 
 if __name__ == "__main__":
     unittest.main()
