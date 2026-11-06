@@ -25,6 +25,13 @@ import re
 import copy
 
 
+def get_db_folder(engine):
+    db_name = str(engine.url.database or "memory").replace(":", "_").replace("/", "_").replace("\\", "_")
+    driver = str(engine.url.drivername or "driver").replace(":", "_").replace("+", "_")
+    host = str(engine.url.host or "localhost").replace(":", "_")
+    return f"{db_name}-{driver}-{host}"
+
+
 class Database:
     __host = ""
     __port = ""
@@ -35,47 +42,61 @@ class Database:
     __params = None
     __engine = None
 
-    def __init__(self, host, port, database, username, password, db_type):
-        self.__host = host
-        self.__port = port
-        self.__database = database
-        self.__username = username
-        self.__password = password
+    def __init__(self, host=None, port=None, database=None, username=None, password=None, db_type="mysql", echo: bool = False):
+        self.__host = host or ""
+        self.__port = port or ""
+        self.__database = database or ""
+        self.__username = username or ""
+        self.__password = password or ""
         self.__db_type = db_type
         params = None
         if db_type == 'mysql':
             params = ("mysql+pymysql://" + self.__username + ":" + self.__password + "@"
                       + self.__host + ":" + str(self.__port) + "/" + self.__database)
-        if db_type == 'postgresql':
+        elif db_type == 'postgresql':
             params = ("postgresql+psycopg2://" + self.__username + ":" + self.__password + "@"
                       + self.__host + ":" + str(self.__port) + "/" + self.__database)
-        if db_type == 'postgresql/psycopg2':
+        elif db_type == 'postgresql/psycopg2':
             params = ("postgresql+psycopg2://" + self.__username + ":" + self.__password + "@"
                       + self.__host + ":" + str(self.__port) + "/" + self.__database)
-        if db_type == 'postgresql/pg8000':
+        elif db_type == 'postgresql/pg8000':
             params = ("postgresql+pg8000://" + self.__username + ":" + self.__password + "@"
                       + self.__host + ":" + str(self.__port) + "/" + self.__database)
-        if db_type == 'oracle':
+        elif db_type == 'oracle':
             params = ("oracle://" + self.__username + ":" + self.__password + "@"
                       + self.__host + ":" + str(self.__port) + "/" + self.__database)
-        if db_type == 'oracle/cx_oracle':
+        elif db_type == 'oracle/cx_oracle':
             params = ("oracle://" + self.__username + ":" + self.__password + "@"
                       + self.__host + ":" + str(self.__port))
-        if db_type == 'mssql':
+        elif db_type == 'mssql':
             params = ("mssql+pyodbc://" + self.__username + ":" + self.__password + "@"
                       + self.__host + ":" + str(self.__port))
-        if db_type == 'mssql/pymssql':
+        elif db_type == 'mssql/pymssql':
             params = ("mssql+pymssql://" + self.__username + ":" + self.__password + "@"
                       + self.__host + ":" + str(self.__port) + "/" + self.__database)
-        self.__engine = create_engine(params, echo=True)
+        elif db_type == 'sqlite':
+            if self.__database == ':memory:' or not self.__database:
+                params = "sqlite:///:memory:"
+            else:
+                params = "sqlite:///" + self.__database
+        elif db_type == 'sqlite/memory':
+            params = "sqlite:///:memory:"
+        else:
+            params = "sqlite:///:memory:"
+
+        self.__params = params
+        self.__engine = create_engine(params, echo=echo)
         try:
-            print("Testing connection to " + db_type + " database on " + self.__host + ":" + str(self.__port))
+            target_info = f"{self.__host}:{self.__port}" if self.__host else (self.__database or ":memory:")
+            if echo:
+                print("Testing connection to " + db_type + " database on " + str(target_info))
             db = self.connection()
             db.execute(text('SELECT 1'))
-            print('Connection successful')
+            if echo:
+                print('Connection successful')
             db.close()
-        except:
-            print("An error has ocurred while connecting to database")
+        except Exception as err:
+            print("An error has occurred while connecting to database:", err)
             self.__database = None
             self.__engine = None
 
@@ -101,7 +122,7 @@ class Generator:
                     print("Generating methods for table " + table)
                 md = sqlalchemy.MetaData()
                 self.check_generated(table=table, engine=engine)
-                db_folder = engine.url.database + "-" + engine.url.drivername + "-" + engine.url.host
+                db_folder = get_db_folder(engine)
                 f = open("./generated/" + db_folder + "/" + table + ".apy", "r")
                 columns = None
                 autoincrement = True
@@ -144,7 +165,7 @@ class Generator:
         engine = database.engine()
         if engine and database:
             first_time = False
-            db_folder = engine.url.database + "-" + engine.url.drivername + "-" + engine.url.host
+            db_folder = get_db_folder(engine)
             if not os.path.exists("./generated/" + db_folder):
                 first_time = True
             if ask_for_tables is None and not os.path.exists("./generated/" + db_folder):
@@ -211,7 +232,7 @@ class Generator:
         return cols
 
     def check_generated(self, table: str, engine: Database.engine):
-        db_folder = engine.url.database + "-" + engine.url.drivername + "-" + engine.url.host
+        db_folder = get_db_folder(engine)
         if not os.path.exists("./generated"):
             os.mkdir("./generated")
         if not os.path.exists("./generated/" + db_folder):
@@ -230,6 +251,7 @@ class Methods:
     def __init__(self, database: Database, table: str, fields: list, prefix: str, ask_for_methods: bool):
         self.__md = sqlalchemy.MetaData()
         self.__engine = database.engine()
+        self._fk_table_cache = {}
         table_id = None
         if fields is not None:
             table_id = self.found_id(fields=fields)
@@ -341,7 +363,7 @@ class Methods:
             return False
 
     def read_api_files(self, table_id, table, columns, engine, ask_for_methods):
-        db_folder = engine.url.database + "-" + engine.url.drivername + "-" + engine.url.host
+        db_folder = get_db_folder(engine)
         f = open("./generated/" + db_folder + "/" + table + ".apy", "r")
         ask_response = None
         if f.read() == '':
@@ -486,7 +508,11 @@ class Methods:
                                          meta=meta)
 
     def extend_foreign_key(self, table, column, value, db):
-        fk_table = Table(table, self.__md, autoload_with=self.__engine)
+        if not hasattr(self, '_fk_table_cache'):
+            self._fk_table_cache = {}
+        if table not in self._fk_table_cache:
+            self._fk_table_cache[table] = Table(table, self.__md, autoload_with=self.__engine)
+        fk_table = self._fk_table_cache[table]
         column_object = getattr(fk_table.c, column)
         query = sqlalchemy.select(fk_table).where(column_object == value)
         res = db.execute(query).first()

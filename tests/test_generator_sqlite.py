@@ -8,10 +8,27 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "venv", "Lib", "site-packages")))
 
 from sqltypes import sqltypes, mapped_sqltypes
+from generator import Database, get_db_folder
 
 
 class TestGeneratorAndSQLTypes(unittest.TestCase):
     """Pruebas para tipos SQL, mapeos y reflexion con base de datos de prueba."""
+
+    def test_database_sqlite_native_support(self):
+        """Verifica que la clase Database soporte SQLite y SQLite en memoria sin echo bloqueante."""
+        db = Database(database=":memory:", db_type="sqlite", echo=False)
+        self.assertIsNotNone(db.engine(), "Fallo al inicializar engine SQLite nativo")
+        with db.connection() as conn:
+            res = conn.execute(sqlalchemy.text("SELECT 100")).scalar()
+            self.assertEqual(res, 100)
+
+    def test_get_db_folder_sanitization(self):
+        """Verifica que get_db_folder genere nombres de directorio validos sin caracteres ilegales."""
+        engine = create_engine("sqlite:///:memory:")
+        folder = get_db_folder(engine)
+        self.assertNotIn(":", folder, "El nombre de carpeta contiene dos puntos ilegales en Windows")
+        self.assertIn("memory", folder)
+        self.assertIn("sqlite", folder)
 
     def test_sqltypes_completeness(self):
         """Verifica que los tipos SQL estandar esten definidos y mapeados a SQLAlchemy."""
