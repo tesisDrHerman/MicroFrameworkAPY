@@ -1,0 +1,155 @@
+# Docker Compose preconfigurado para benchmarking reproducible con MySQL 8 y PostgreSQL 16
+# Ejecutar desde la raiz de MicroFrameworkAPY usando:
+#   docker compose -f benchmarks/docker-compose.yml --env-file benchmarks/.env --profile mysql up -d mysql
+#   docker compose -f benchmarks/docker-compose.yml --env-file benchmarks/.env --profile postgres up -d postgres
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: bench_mysql
+    profiles: ["mysql", "all-db"]
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-bench_apy}
+      MYSQL_USER: ${MYSQL_USER:-bench_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-bench_pass_2026}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_pass_2026}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    command: --default-authentication-plugin=mysql_native_password --max_connections=150 --innodb_buffer_pool_size=128M --innodb_log_buffer_size=16M --performance_schema=OFF
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 450M
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root_pass_2026}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - mysql_bench_data:/var/lib/mysql
+    networks:
+      - bench_net
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: bench_postgres
+    profiles: ["postgres", "all-db"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-bench_apy}
+      POSTGRES_USER: ${POSTGRES_USER:-bench_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bench_pass_2026}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    command: ["postgres", "-c", "max_connections=150", "-c", "shared_buffers=128MB"]
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 450M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bench_user} -d ${POSTGRES_DB:-bench_apy}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - postgres_bench_data:/var/lib/postgresql/data
+    networks:
+      - bench_net
+
+  apy-server:
+    image: benchmarks-apy-server:latest
+    container_name: bench_apy
+    profiles: ["apy"]
+    volumes:
+      - ..:/app
+    environment:
+      APY_HOST: "0.0.0.0"
+      APY_PORT: "4201"
+      DB_TYPE: "${DB_TYPE:-mysql}"
+      DB_HOST: "${DB_HOST:-mysql}"
+      DB_PORT: "${DB_PORT:-3306}"
+      DB_NAME: "${DB_NAME:-bench_apy}"
+      DB_USER: "${DB_USER:-bench_user}"
+      DB_PASS: "${DB_PASS:-bench_pass_2026}"
+    ports:
+      - "4201:4201"
+    command: ["python3", "benchmarks/bench_apy.py"]
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 400M
+    networks:
+      - bench_net
+
+  fastapi-server:
+    image: benchmarks-apy-server:latest
+    container_name: bench_fastapi
+    profiles: ["fastapi"]
+    volumes:
+      - ..:/app
+    environment:
+      DB_URL: "${DB_URL:-mysql+pymysql://bench_user:bench_pass_2026@mysql:3306/bench_apy}"
+    ports:
+      - "4202:4202"
+    command: ["uvicorn", "benchmarks.bench_fastapi:app", "--host", "0.0.0.0", "--port", "4202", "--workers", "1", "--no-access-log"]
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 400M
+    networks:
+      - bench_net
+
+  flask-server:
+    image: benchmarks-apy-server:latest
+    container_name: bench_flask
+    profiles: ["flask"]
+    volumes:
+      - ..:/app
+    environment:
+      DB_URL: "${DB_URL:-mysql+pymysql://bench_user:bench_pass_2026@mysql:3306/bench_apy}"
+    ports:
+      - "4203:4203"
+    command: ["gunicorn", "-w", "1", "--threads", "4", "-b", "0.0.0.0:4203", "benchmarks.bench_flask:app"]
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 400M
+    networks:
+      - bench_net
+
+  k6:
+    image: grafana/k6:latest
+    container_name: bench_k6
+    profiles: ["k6"]
+    volumes:
+      - ../benchmarks:/scripts:ro
+      - ../results:/results
+    networks:
+      - bench_net
+
+volumes:
+  mysql_bench_data:
+  postgres_bench_data:
+
+networks:
+  bench_net:
+    name: bench_net
+    driver: bridge

@@ -56,3 +56,6 @@ Homepage = "https://github.com/tesisDrHerman/MicroFrameworkAPY"
 Repository = "https://github.com/tesisDrHerman/MicroFrameworkAPY.git"
 Issues = "https://github.com/tesisDrHerman/MicroFrameworkAPY/issues"
 
+[tool.setuptools]
+py-modules = ["server", "router", "generator", "sqltypes", "swagger", "apps", "main"]
+

@@ -2,7 +2,10 @@
 try:
     import orjson
     def json_dumps(data) -> str:
-        return orjson.dumps(data).decode('utf-8')
+        try:
+            return orjson.dumps(data, option=orjson.OPT_NON_STR_KEYS).decode('utf-8')
+        except Exception:
+            return std_json.dumps(data, default=str)
     def json_loads(data):
         return orjson.loads(data)
 except ImportError:
@@ -496,6 +499,13 @@ class Server():
                 bytes_recd = 0  # CONTADOR DE LOS BYTES RECIBIDOS
                 msg_len = 0
                 chunk = sock.recv(1024)
+                if not chunk:
+                    try:
+                        self.sel.unregister(sock)
+                        sock.close()
+                    except Exception:
+                        pass
+                    return
                 chunks.append(chunk)
                 msg_len = self.get_msg_len(chunk)
                 if msg_len is not None:
@@ -542,16 +552,19 @@ class Server():
                         if suburl[0] not in self.__METHODS.page_urls and not safe_file:
                             run, status = self.handle_request(rtype, suburl, params)
                             if run == "OPTIONS":
-                                print(rtype, "REQUEST ACCEPED FROM", data_dict['addr'], "- STATUS:",
-                                      status[0].decode("utf-8"), status[1].decode("utf-8"))
+                                if self.__SHOW_URLS:
+                                    print(rtype, "REQUEST ACCEPED FROM", data_dict['addr'], "- STATUS:",
+                                          status[0].decode("utf-8"), status[1].decode("utf-8"))
                                 self.sender_options(sock, status)
                             if status not in self.error_status:
-                                print(rtype, "REQUEST ACCEPED FROM", data_dict['addr'], "- STATUS:",
-                                      status[0].decode("utf-8"), status[1].decode("utf-8"))
+                                if self.__SHOW_URLS:
+                                    print(rtype, "REQUEST ACCEPED FROM", data_dict['addr'], "- STATUS:",
+                                          status[0].decode("utf-8"), status[1].decode("utf-8"))
                                 self.sender(sock, run, status, keep_alive=keep_alive)
                             else:
-                                print(rtype, "REQUEST FAILED FROM", data_dict['addr'], "- STATUS",
-                                      status[0].decode("utf-8"), "ERROR -", run)
+                                if self.__SHOW_URLS:
+                                    print(rtype, "REQUEST FAILED FROM", data_dict['addr'], "- STATUS",
+                                          status[0].decode("utf-8"), "ERROR -", run)
                         else:
                             url = suburl[0]
                             if safe_file:
@@ -575,12 +588,27 @@ class Server():
                             else:
                                 self.senderHtml(sock, '', self.status_codes.http_404())
                         if not keep_alive:
-                            self.sel.unregister(sock)
-                            sock.close()
+                            try:
+                                self.sel.unregister(sock)
+                                sock.close()
+                            except Exception:
+                                pass
                         return
+                else:
+                    try:
+                        self.sel.unregister(sock)
+                        sock.close()
+                    except Exception:
+                        pass
+                    return
                 if recv_data:
                     data.outb += recv_data
         except Exception as err:
+            try:
+                self.sel.unregister(sock)
+                sock.close()
+            except Exception:
+                pass
             print("CONNECTION ERROR:"+ str(err))
 
     def handle_request_html(self, suburl):
@@ -634,20 +662,51 @@ class Server():
                         run, status = mw.process_response(rtype, suburl, run, status)
                     return run, status
                 if rtype == "POST":
-                    params[1] = params[1].replace("\n", '')
-                    request = json_loads(params[1])
+                    raw_body = params[1].strip() if len(params) > 1 and params[1] else ""
+                    try:
+                        request = json_loads(raw_body) if raw_body else {}
+                    except Exception:
+                        request = raw_body
                     if suburl[0] not in self.__METHODS.post_methods:
                         return "'" + suburl[0] + "' Not found", self.status_codes.http_404()
-                    run, status = self.__METHODS.post_methods[suburl[0]](request)
+                    fn = self.__METHODS.post_methods[suburl[0]]
+                    try:
+                        sig_params = list(signature(fn).parameters.values())
+                        if len(sig_params) == 0:
+                            run, status = fn()
+                        else:
+                            run, status = fn(request)
+                    except Exception:
+                        run, status = fn(request)
                     return run, status
                 if rtype == "PUT":
-                    params[1] = params[1].replace("\n", '')
-                    request = json_loads(params[1])
+                    if suburl[0] not in self.__METHODS.put_methods:
+                        return "'" + suburl[0] + "' Not found", self.status_codes.http_404()
+                    raw_body = params[1].strip() if len(params) > 1 and params[1] else ""
+                    try:
+                        request = json_loads(raw_body) if raw_body else {}
+                    except Exception:
+                        request = raw_body
+                    fn = self.__METHODS.put_methods[suburl[0]]
+                    meta = self.__METHODS.put_methods_meta.get(suburl[0], [])
                     args = self.url_paramters(params=suburl[1],
-                                              function=self.__METHODS.put_methods[suburl[0]],
-                                              request=params[1],
-                                              meta=self.__METHODS.put_methods_meta[suburl[0]])
-                    run, status = self.__METHODS.put_methods[suburl[0]](request, **args)
+                                              function=fn,
+                                              request=raw_body,
+                                              meta=meta) or {}
+                    try:
+                        sig_params = list(signature(fn).parameters.values())
+                        if len(sig_params) == 0:
+                            run, status = fn()
+                        elif len(sig_params) == 1 and not args:
+                            run, status = fn(request)
+                        else:
+                            first_name = sig_params[0].name
+                            if first_name not in args and (first_name in ('request', 'payload', 'data', 'body') or len(sig_params) > len(args)):
+                                run, status = fn(request, **args)
+                            else:
+                                run, status = fn(**args)
+                    except Exception:
+                        run, status = fn(request, **args)
                     if run == None:
                         return "Not found", self.status_codes.http_404()
                     return run, status
@@ -667,13 +726,33 @@ class Server():
                     status = self.status_codes.http_200()
                     return run, status
                 if rtype == "PATCH":
-                    params[1] = params[1].replace("\n", '')
-                    request = json_loads(params[1])
+                    if suburl[0] not in self.__METHODS.patch_methods:
+                        return "'" + suburl[0] + "' Not found", self.status_codes.http_404()
+                    raw_body = params[1].strip() if len(params) > 1 and params[1] else ""
+                    try:
+                        request = json_loads(raw_body) if raw_body else {}
+                    except Exception:
+                        request = raw_body
+                    fn = self.__METHODS.patch_methods[suburl[0]]
+                    meta = self.__METHODS.patch_methods_meta.get(suburl[0], [])
                     args = self.url_paramters(params=suburl[1],
-                                              function=self.__METHODS.patch_methods[suburl[0]],
-                                              request=params[1],
-                                              meta=self.__METHODS.patch_methods_meta[suburl[0]])
-                    run, status = self.__METHODS.patch_methods[suburl[0]](request, **args)
+                                              function=fn,
+                                              request=raw_body,
+                                              meta=meta) or {}
+                    try:
+                        sig_params = list(signature(fn).parameters.values())
+                        if len(sig_params) == 0:
+                            run, status = fn()
+                        elif len(sig_params) == 1 and not args:
+                            run, status = fn(request)
+                        else:
+                            first_name = sig_params[0].name
+                            if first_name not in args and (first_name in ('request', 'payload', 'data', 'body') or len(sig_params) > len(args)):
+                                run, status = fn(request, **args)
+                            else:
+                                run, status = fn(**args)
+                    except Exception:
+                        run, status = fn(request, **args)
                     if run == None:
                         return "Not found", self.status_codes.http_404()
                     return run, status
@@ -740,18 +819,19 @@ class Server():
 
     def request_constructor(self, port: str, raw: list):
         try:
+            body = raw[1] if len(raw) > 1 else ""
             if "POST" in raw[0]:
-                full_raw = [raw[0], raw[1]]
+                full_raw = [raw[0], body]
                 return "POST", full_raw
             if "GET" in raw[0]:
                 return "GET", [raw[0]]
             if "PATCH" in raw[0]:
-                full_raw = [raw[0], raw[1]]
+                full_raw = [raw[0], body]
                 return "PATCH", full_raw
             if "DELETE" in raw[0]:
                 return "DELETE", [raw[0]]
             if "PUT" in raw[0]:
-                full_raw = [raw[0], raw[1]]
+                full_raw = [raw[0], body]
                 return "PUT", full_raw
             if "HEAD" in raw[0]:
                 return "HEAD", [raw[0]]
@@ -813,6 +893,8 @@ class Server():
                          + len(self.__METHODS.patch_methods))
                 print(str(total)+" GENERATED METHODS")
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                if sys.platform != 'win32':
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 s.bind((self.__HOST, self.__PORT))
                 s.listen()
                 s.setblocking(False)

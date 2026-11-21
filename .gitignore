@@ -63,3 +63,8 @@ desktop.ini
 *.log
 *.sqlite
 *.sqlite3
+*.db
+results/
+*.zip
+generated/
+run_pilot.ps1

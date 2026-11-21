@@ -1,0 +1,17 @@
+# Dependencias de benchmarking y analisis (reproducible)
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+flask>=3.0.0
+gunicorn>=22.0.0
+waitress>=3.0.0
+SQLAlchemy>=2.0.0
+pydantic>=2.7.0
+orjson>=3.9.0
+PyMySQL>=1.1.0
+cryptography>=42.0.0
+psycopg2-binary>=2.9.9
+psutil>=5.9.0
+radon>=6.0.1
+pandas>=2.2.0
+numpy>=1.26.0
+scipy>=1.13.0

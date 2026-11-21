@@ -1,0 +1,22 @@
+# Imagen unificada Python 3.11 para paridad experimental exacta (APY, FastAPI, Flask)
+# Contexto de construccion: raiz del repositorio MicroFrameworkAPY
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copiar el repositorio completo (incluyendo benchmarks/)
+COPY . /app
+
+# Instalar MicroFrameworkAPY v1.0.0 con orjson y drivers + competidores
+RUN (pip install --no-cache-dir -e ".[all]" || pip install --no-cache-dir ".[all]" || pip install --no-cache-dir .) && \
+    pip install --no-cache-dir -r /app/benchmarks/requirements_bench.txt
+
+EXPOSE 4201 4202 4203
