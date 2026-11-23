@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "venv", "Lib", "site-packages")))
 
 from sqltypes import sqltypes, mapped_sqltypes
-from generator import Database, get_db_folder
+from generator import Database, Generator, get_db_folder
 
 
 class TestGeneratorAndSQLTypes(unittest.TestCase):
@@ -16,11 +16,19 @@ class TestGeneratorAndSQLTypes(unittest.TestCase):
 
     def test_database_sqlite_native_support(self):
         """Verifica que la clase Database soporte SQLite y SQLite en memoria sin echo bloqueante."""
-        db = Database(database=":memory:", db_type="sqlite", echo=False)
+        db = Database(database=":memory:", db_type="sqlite", echo=False, threads=8)
         self.assertIsNotNone(db.engine(), "Fallo al inicializar engine SQLite nativo")
+        self.assertEqual(db.threads, 8)
         with db.connection() as conn:
             res = conn.execute(sqlalchemy.text("SELECT 100")).scalar()
             self.assertEqual(res, 100)
+
+    def test_generator_threads_configuration(self):
+        """Verifica que Generator configure y permita elegir hilos."""
+        gen = Generator(threads=6)
+        self.assertEqual(gen.threads, 6)
+        gen.set_threads(12)
+        self.assertEqual(gen.threads, 12)
 
     def test_get_db_folder_sanitization(self):
         """Verifica que get_db_folder genere nombres de directorio validos sin caracteres ilegales."""

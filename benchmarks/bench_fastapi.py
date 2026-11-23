@@ -62,6 +62,18 @@ orders = Table(
 app = FastAPI(title="FastAPI Benchmark Equivalent")
 
 
+@app.on_event("startup")
+def configure_threads():
+    try:
+        import anyio.to_thread
+        threads = int(os.getenv("FASTAPI_THREADS", "4"))
+        limiter = anyio.to_thread.current_default_thread_limiter()
+        limiter.total_tokens = threads
+        print(f"[FastAPI PID={os.getpid()}] AnyIO threadpool estrictamente limitado a {limiter.total_tokens} tokens (hilos).")
+    except Exception as e:
+        print(f"[FastAPI] Advertencia al configurar limiter de AnyIO: {e}")
+
+
 class OrderIn(BaseModel):
     user_id: int
     category_id: int

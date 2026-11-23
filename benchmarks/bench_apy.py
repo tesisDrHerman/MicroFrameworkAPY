@@ -26,8 +26,9 @@ from generator import Database, Generator
 status = Http_status()
 HOST = os.getenv("APY_HOST", "0.0.0.0")
 PORT = int(os.getenv("APY_PORT", "4201"))
+THREADS = int(os.getenv("APY_THREADS", "4"))
 
-api = Server(HOST=HOST, PORT=PORT, SHOW_URLS=False)
+api = Server(HOST=HOST, PORT=PORT, SHOW_URLS=False, threads=THREADS)
 
 # --- Escenario E1: Endpoints Echo (5 verbos HTTP) ---
 def echo_get(value: str = "hello"):
@@ -65,7 +66,7 @@ DB_USER = os.getenv("DB_USER", "root")
 DB_PASS = os.getenv("DB_PASS", "")
 
 if DB_TYPE == "sqlite":
-    db = Database(host="", port=0, database=DB_NAME, username="", password="", db_type="sqlite")
+    db = Database(host="", port=0, database=DB_NAME, username="", password="", db_type="sqlite", threads=THREADS)
 else:
     db = Database(
         host=DB_HOST,
@@ -74,15 +75,17 @@ else:
         username=DB_USER,
         password=DB_PASS,
         db_type=DB_TYPE,
+        threads=THREADS,
     )
 
-gen = Generator()
+gen = Generator(threads=THREADS)
 api.router.add_router(
     gen.build_all(
         database=db,
         prefix="api",
         ask_for_tables=False,
         ask_for_methods=False,
+        threads=THREADS,
     )
 )
 
@@ -93,5 +96,5 @@ if 'api/orders/update' in api.router.put_methods:
     api.router.put_methods['api/orders/put'] = api.router.put_methods['api/orders/update']
 
 if __name__ == "__main__":
-    print(f"[APY v1.0.0] PID={os.getpid()} escuchando en http://{HOST}:{PORT}")
-    api.run()
+    print(f"[APY v1.0.0] PID={os.getpid()} escuchando en http://{HOST}:{PORT} (threads={THREADS})")
+    api.run(threads=THREADS)

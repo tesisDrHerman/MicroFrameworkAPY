@@ -2,7 +2,7 @@ import datetime
 
 import sqlalchemy
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy import Table, Column, MetaData
 from sqlalchemy.orm import mapped_column
 from sqlalchemy.orm import DeclarativeBase
@@ -21,8 +21,86 @@ from sqltypes import sqltypes, mapped_sqltypes
 
 import json
 import os
+import sys
 import re
 import copy
+import threading
+
+
+def _resolve_threads(threads: int = None, ask: bool = False, default: int = 4) -> int:
+    """Resuelve la cantidad de hilos a usar evaluando argumento explicito, CLI (--threads/-t),
+    variable de entorno APY_THREADS o consulta interactiva si se solicita."""
+    if threads is not None:
+        try:
+            return max(1, int(threads))
+        except (ValueError, TypeError):
+            pass
+
+    if sys.argv:
+        for idx, arg in enumerate(sys.argv):
+            if arg in ("--threads", "-t") and idx + 1 < len(sys.argv):
+                try:
+                    return max(1, int(sys.argv[idx + 1]))
+                except ValueError:
+                    pass
+            elif arg.startswith("--threads="):
+                try:
+                    return max(1, int(arg.split("=", 1)[1]))
+                except ValueError:
+                    pass
+
+    env_threads = os.getenv("APY_THREADS")
+    if env_threads:
+        try:
+            return max(1, int(env_threads))
+        except ValueError:
+            pass
+
+    if ask and sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+        try:
+            print(f"Seleccione el numero de hilos a configurar en el generator/pool [defecto {default}] > ", end="", flush=True)
+            ans = input().strip()
+            if ans.isdigit() and int(ans) > 0:
+                return int(ans)
+        except Exception:
+            pass
+
+    return default
+
+
+class ThreadSafeSession:
+    def __init__(self, factory):
+        self._factory = factory
+        self._local = threading.local()
+
+    def _get_session(self):
+        if not hasattr(self._local, "session") or self._local.session is None:
+            self._local.session = self._factory()
+        return self._local.session
+
+    def execute(self, *args, **kwargs):
+        return self._get_session().execute(*args, **kwargs)
+
+    def commit(self):
+        return self._get_session().commit()
+
+    def rollback(self):
+        return self._get_session().rollback()
+
+    def close(self):
+        if hasattr(self._local, "session") and self._local.session is not None:
+            try:
+                self._local.session.rollback()
+                self._local.session.close()
+            except Exception:
+                pass
+            self._local.session = None
+
+    def __enter__(self):
+        return self._get_session().__enter__()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return self._get_session().__exit__(exc_type, exc_val, exc_tb)
 
 
 def get_db_folder(engine):
@@ -41,14 +119,16 @@ class Database:
     __db_type = ""
     __params = None
     __engine = None
+    __threads = 4
 
-    def __init__(self, host=None, port=None, database=None, username=None, password=None, db_type="mysql", echo: bool = False):
+    def __init__(self, host=None, port=None, database=None, username=None, password=None, db_type="mysql", echo: bool = False, threads: int = None, pool_size: int = None, max_overflow: int = None):
         self.__host = host or ""
         self.__port = port or ""
         self.__database = database or ""
         self.__username = username or ""
         self.__password = password or ""
         self.__db_type = db_type
+        self.__threads = _resolve_threads(threads=threads, ask=False, default=4)
         params = None
         if db_type == 'mysql':
             params = ("mysql+pymysql://" + self.__username + ":" + self.__password + "@"
@@ -85,7 +165,11 @@ class Database:
             params = "sqlite:///:memory:"
 
         self.__params = params
-        self.__engine = create_engine(params, echo=echo)
+        engine_kwargs = {"echo": echo}
+        if not params.startswith("sqlite"):
+            engine_kwargs["pool_size"] = pool_size if pool_size is not None else max(25, self.__threads * 3)
+            engine_kwargs["max_overflow"] = max_overflow if max_overflow is not None else max(50, self.__threads * 5)
+        self.__engine = create_engine(params, **engine_kwargs)
         try:
             target_info = f"{self.__host}:{self.__port}" if self.__host else (self.__database or ":memory:")
             if echo:
@@ -100,10 +184,13 @@ class Database:
             self.__database = None
             self.__engine = None
 
+    @property
+    def threads(self):
+        return self.__threads
+
     def connection(self):
-        db = sessionmaker(bind=self.__engine)
-        conn = db()
-        return conn
+        factory = sessionmaker(bind=self.__engine)
+        return ThreadSafeSession(factory)
 
     def engine(self):
         return self.__engine
@@ -111,9 +198,27 @@ class Database:
 
 class Generator:
     __debug: bool = False
+    threads: int = 4
 
-    def __init__(self, debug: bool = False):
+    def __init__(self, debug: bool = False, threads: int = None, ask_for_threads: bool = False):
         self.__debug = debug
+        self.threads = _resolve_threads(threads=threads, ask=ask_for_threads, default=4)
+
+    def set_threads(self, threads: int):
+        """Permite reconfigurar el numero de hilos asociado al generador y pool de conexiones."""
+        self.threads = max(1, int(threads))
+
+    def check_ask_for_threads(self) -> int:
+        """Consulta interactivamente al usuario el numero de hilos para el generador/pool."""
+        try:
+            print(f"Seleccione el numero de hilos para el generador/pool [actual: {self.threads}] > ", end="", flush=True)
+            ans = input().strip()
+            if ans.isdigit() and int(ans) > 0:
+                self.threads = int(ans)
+                return self.threads
+        except Exception:
+            pass
+        return self.threads
 
     def build(self, database: Database, table: str, prefix: str, ask_for_methods: bool = None):
         engine = database.engine()
@@ -161,7 +266,15 @@ class Generator:
     def build_all(self, database: Database,
                   prefix: str = None,
                   ask_for_tables: bool = None,
-                  ask_for_methods: bool = None):
+                  ask_for_methods: bool = None,
+                  threads: int = None,
+                  ask_for_threads: bool = None):
+        if threads is not None:
+            self.set_threads(threads)
+        elif ask_for_threads is True or (ask_for_threads is None and any(arg in ("--ask-threads", "--interactive-threads") for arg in sys.argv)):
+            if sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+                self.check_ask_for_threads()
+
         engine = database.engine()
         if engine and database:
             first_time = False
@@ -573,6 +686,9 @@ class Methods:
                 return data, self.__status.http_200()
             except Exception as err:
                 return {"status": err}, self.__status.http_400()
+            finally:
+                if hasattr(db, "close"):
+                    db.close()
         return get
 
     def make_post(self, method, db, table_obj):
@@ -584,6 +700,9 @@ class Methods:
                 return {"status": ret[0]}, self.__status.http_201()
             except Exception as err:
                 return {"status": err}, self.__status.http_400()
+            finally:
+                if hasattr(db, "close"):
+                    db.close()
 
         return post
 
@@ -599,6 +718,9 @@ class Methods:
                 return {"status": ret[0]}, self.__status.http_200()
             except Exception as err:
                 return {"status": err}, self.__status.http_400()
+            finally:
+                if hasattr(db, "close"):
+                    db.close()
 
         return put
 
@@ -614,6 +736,9 @@ class Methods:
                 return {"status": ret[0]}, self.__status.http_200()
             except Exception as err:
                 return {"status": err}, self.__status.http_400()
+            finally:
+                if hasattr(db, "close"):
+                    db.close()
 
         return delete
 
@@ -629,6 +754,9 @@ class Methods:
                 return {"status": ret[0]}, self.__status.http_200()
             except Exception as err:
                 return {"status": err}, self.__status.http_400()
+            finally:
+                if hasattr(db, "close"):
+                    db.close()
 
         return patch
 
@@ -672,3 +800,13 @@ class Methods:
                 return item['column']
             else:
                 return False
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="MicroFrameworkAPY Generator")
+    parser.add_argument("--threads", "-t", type=int, default=None, help="Worker threads / pool sizing (default: 4)")
+    parser.add_argument("--ask-threads", action="store_true", help="Ask interactively for number of threads")
+    args, _ = parser.parse_known_args()
+    gen_instance = Generator(threads=args.threads, ask_for_threads=args.ask_threads)
+    print(f"Generator configured with {gen_instance.threads} threads.")

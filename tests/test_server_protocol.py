@@ -124,6 +124,19 @@ class TestServerProtocol(unittest.TestCase):
         decoded = json_loads(encoded)
         self.assertEqual(data, decoded)
 
+    def test_server_threads_configuration(self):
+        """Verifica que Server configure correctamente el pool de hilos y modo monohilo."""
+        s4 = Server(HOST="127.0.0.1", PORT=9996, threads=4)
+        self.assertIsNotNone(s4.executor)
+        self.assertEqual(s4.executor._max_workers, 4)
+
+        # Reconfiguracion dinamica de hilos
+        s4.set_threads(8)
+        self.assertEqual(s4.executor._max_workers, 8)
+
+        s1 = Server(HOST="127.0.0.1", PORT=9995, threads=1)
+        self.assertIsNone(s1.executor)
+
 
 if __name__ == "__main__":
     unittest.main()

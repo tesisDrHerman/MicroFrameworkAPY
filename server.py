@@ -1,3 +1,5 @@
+import json as std_json
+
 # Adaptador JSON con aceleracion automatica (fallback a stdlib json)
 try:
     import orjson
@@ -19,10 +21,13 @@ except ImportError:
         json_loads = std_json.loads
 
 import json
+import os
 import os.path
 import socket
 import selectors
 import threading
+from concurrent.futures import ThreadPoolExecutor
+import queue
 import types
 from inspect import signature
 from multiprocessing.sharedctypes import Value
@@ -353,6 +358,47 @@ class Router:
                 self.dynamic_routes[m].extend(router.dynamic_routes.get(m, []))
 
 
+def _resolve_threads(threads: int = None, ask: bool = False, default: int = 4) -> int:
+    """Resuelve la cantidad de hilos a usar evaluando argumento explicito, CLI (--threads/-t),
+    variable de entorno APY_THREADS o consulta interactiva si se solicita."""
+    if threads is not None:
+        try:
+            return max(1, int(threads))
+        except (ValueError, TypeError):
+            pass
+
+    if sys.argv:
+        for idx, arg in enumerate(sys.argv):
+            if arg in ("--threads", "-t") and idx + 1 < len(sys.argv):
+                try:
+                    return max(1, int(sys.argv[idx + 1]))
+                except ValueError:
+                    pass
+            elif arg.startswith("--threads="):
+                try:
+                    return max(1, int(arg.split("=", 1)[1]))
+                except ValueError:
+                    pass
+
+    env_threads = os.getenv("APY_THREADS")
+    if env_threads:
+        try:
+            return max(1, int(env_threads))
+        except ValueError:
+            pass
+
+    if ask and sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+        try:
+            print(f"Seleccione el numero de hilos a usar para el servidor [defecto {default}] > ", end="", flush=True)
+            ans = input().strip()
+            if ans.isdigit() and int(ans) > 0:
+                return int(ans)
+        except Exception:
+            pass
+
+    return default
+
+
 class Server():
     __DOCS_URL = "docs"
     __METHODS: Router
@@ -390,12 +436,43 @@ class Server():
     request_types = ["POST", "GET", "PATCH", "DELETE", "PUT", "OPTIONS", "HEAD"]
     no_ssl = "PGDOH"
 
-    def __init__(self, HOST: str, PORT: int, SHOW_URLS: bool = False):
+    def __init__(self, HOST: str, PORT: int, SHOW_URLS: bool = False, threads: int = None, ask_for_threads: bool = False):
         self.__HOST = HOST
         self.__PORT = PORT
         self.__SHOW_URLS = SHOW_URLS
+        self.__THREADS = _resolve_threads(threads=threads, ask=ask_for_threads, default=4)
+        self.sel = selectors.DefaultSelector()
+        self.executor = ThreadPoolExecutor(max_workers=self.__THREADS) if self.__THREADS > 1 else None
+        self.rearm_queue = queue.Queue()
         self.middlewares = []
-        print("Initialized server on " + HOST + ":" + str(PORT))
+        print("Initialized server on " + HOST + ":" + str(PORT) + (f" (threads={self.__THREADS})" if self.__THREADS > 1 else ""))
+
+    def set_threads(self, threads: int):
+        """Permite reconfigurar dinamicamente el numero de hilos de ejecucion del servidor."""
+        new_threads = max(1, int(threads))
+        if new_threads == self.__THREADS and self.executor is not None:
+            return
+        if self.executor is not None:
+            try:
+                self.executor.shutdown(wait=False)
+            except Exception:
+                pass
+        self.__THREADS = new_threads
+        self.executor = ThreadPoolExecutor(max_workers=self.__THREADS) if self.__THREADS > 1 else None
+        print(f"Reconfigured server threads to: {self.__THREADS}")
+
+    def check_ask_for_threads(self) -> int:
+        """Consulta interactivamente al usuario el numero de hilos deseados."""
+        try:
+            print(f"Seleccione el numero de hilos para el servidor [actual: {self.__THREADS}] > ", end="", flush=True)
+            ans = input().strip()
+            if ans.isdigit() and int(ans) > 0:
+                chosen = int(ans)
+                self.set_threads(chosen)
+                return chosen
+        except Exception:
+            pass
+        return self.__THREADS
 
     def add_middleware(self, middleware: BaseMiddleware):
         self.middlewares.append(middleware)
@@ -547,53 +624,16 @@ class Server():
 
                     rtype, params = self.request_constructor(data_dict['addr'][1], raw)
                     if params != None:
-                        suburl = self.get_url(params)
-                        safe_file = self.safe_static_path("htdocs", suburl[0])
-                        if suburl[0] not in self.__METHODS.page_urls and not safe_file:
-                            run, status = self.handle_request(rtype, suburl, params)
-                            if run == "OPTIONS":
-                                if self.__SHOW_URLS:
-                                    print(rtype, "REQUEST ACCEPED FROM", data_dict['addr'], "- STATUS:",
-                                          status[0].decode("utf-8"), status[1].decode("utf-8"))
-                                self.sender_options(sock, status)
-                            if status not in self.error_status:
-                                if self.__SHOW_URLS:
-                                    print(rtype, "REQUEST ACCEPED FROM", data_dict['addr'], "- STATUS:",
-                                          status[0].decode("utf-8"), status[1].decode("utf-8"))
-                                self.sender(sock, run, status, keep_alive=keep_alive)
-                            else:
-                                if self.__SHOW_URLS:
-                                    print(rtype, "REQUEST FAILED FROM", data_dict['addr'], "- STATUS",
-                                          status[0].decode("utf-8"), "ERROR -", run)
-                        else:
-                            url = suburl[0]
-                            if safe_file:
-                                is_binary = safe_file.endswith((".ico", ".png", ".jpg", ".jpeg"))
-                                mode = "rb" if is_binary else "r"
-                                encoding = None if is_binary else "utf-8"
-                                with open(safe_file, mode, encoding=encoding, errors=None if is_binary else "replace") as f:
-                                    content = f.read()
-                                self.senderHtml(sock, content, self.status_codes.http_200())
-                            elif url in self.router.page_urls:
-                                page_safe = self.safe_static_path("htdocs", self.router.page_urls[url])
-                                if page_safe:
-                                    is_binary = page_safe.endswith((".ico", ".png", ".jpg", ".jpeg"))
-                                    mode = "rb" if is_binary else "r"
-                                    encoding = None if is_binary else "utf-8"
-                                    with open(page_safe, mode, encoding=encoding, errors=None if is_binary else "replace") as file:
-                                        content = file.read()
-                                    self.senderHtml(sock, content, self.status_codes.http_200())
-                                else:
-                                    self.senderHtml(sock, '', self.status_codes.http_404())
-                            else:
-                                self.senderHtml(sock, '', self.status_codes.http_404())
-                        if not keep_alive:
+                        if self.executor is not None:
                             try:
                                 self.sel.unregister(sock)
-                                sock.close()
                             except Exception:
                                 pass
-                        return
+                            self.executor.submit(self._worker_handle_request, sock, rtype, params, keep_alive, data_dict)
+                            return
+                        else:
+                            self._worker_handle_request_sync(sock, rtype, params, keep_alive, data_dict)
+                            return
                 else:
                     try:
                         self.sel.unregister(sock)
@@ -610,6 +650,118 @@ class Server():
             except Exception:
                 pass
             print("CONNECTION ERROR:"+ str(err))
+
+    def _worker_handle_request(self, sock, rtype, params, keep_alive, data_dict):
+        try:
+            suburl = self.get_url(params)
+            safe_file = self.safe_static_path("htdocs", suburl[0])
+            if suburl[0] not in self.__METHODS.page_urls and not safe_file:
+                run, status = self.handle_request(rtype, suburl, params)
+                if run == "OPTIONS":
+                    if self.__SHOW_URLS:
+                        print(rtype, "REQUEST ACCEPED FROM", data_dict['addr'], "- STATUS:",
+                              status[0].decode("utf-8"), status[1].decode("utf-8"))
+                    self.sender_options(sock, status)
+                if status not in self.error_status:
+                    if self.__SHOW_URLS:
+                        print(rtype, "REQUEST ACCEPED FROM", data_dict['addr'], "- STATUS:",
+                              status[0].decode("utf-8"), status[1].decode("utf-8"))
+                    self.sender(sock, run, status, keep_alive=keep_alive)
+                else:
+                    if self.__SHOW_URLS:
+                        print(rtype, "REQUEST FAILED FROM", data_dict['addr'], "- STATUS",
+                              status[0].decode("utf-8"), "ERROR -", run)
+                    self.sender(sock, run, status, keep_alive=keep_alive)
+            else:
+                url = suburl[0]
+                if safe_file:
+                    is_binary = safe_file.endswith((".ico", ".png", ".jpg", ".jpeg"))
+                    mode = "rb" if is_binary else "r"
+                    encoding = None if is_binary else "utf-8"
+                    with open(safe_file, mode, encoding=encoding, errors=None if is_binary else "replace") as f:
+                        content = f.read()
+                    self.senderHtml(sock, content, self.status_codes.http_200())
+                elif url in self.router.page_urls:
+                    page_safe = self.safe_static_path("htdocs", self.router.page_urls[url])
+                    if page_safe:
+                        is_binary = page_safe.endswith((".ico", ".png", ".jpg", ".jpeg"))
+                        mode = "rb" if is_binary else "r"
+                        encoding = None if is_binary else "utf-8"
+                        with open(page_safe, mode, encoding=encoding, errors=None if is_binary else "replace") as file:
+                            content = file.read()
+                        self.senderHtml(sock, content, self.status_codes.http_200())
+                    else:
+                        self.senderHtml(sock, '', self.status_codes.http_404())
+                else:
+                    self.senderHtml(sock, '', self.status_codes.http_404())
+            if keep_alive:
+                self.rearm_queue.put((sock, data_dict))
+            else:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+        except Exception:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+    def _worker_handle_request_sync(self, sock, rtype, params, keep_alive, data_dict):
+        try:
+            suburl = self.get_url(params)
+            safe_file = self.safe_static_path("htdocs", suburl[0])
+            if suburl[0] not in self.__METHODS.page_urls and not safe_file:
+                run, status = self.handle_request(rtype, suburl, params)
+                if run == "OPTIONS":
+                    if self.__SHOW_URLS:
+                        print(rtype, "REQUEST ACCEPED FROM", data_dict['addr'], "- STATUS:",
+                              status[0].decode("utf-8"), status[1].decode("utf-8"))
+                    self.sender_options(sock, status)
+                if status not in self.error_status:
+                    if self.__SHOW_URLS:
+                        print(rtype, "REQUEST ACCEPED FROM", data_dict['addr'], "- STATUS:",
+                              status[0].decode("utf-8"), status[1].decode("utf-8"))
+                    self.sender(sock, run, status, keep_alive=keep_alive)
+                else:
+                    if self.__SHOW_URLS:
+                        print(rtype, "REQUEST FAILED FROM", data_dict['addr'], "- STATUS",
+                              status[0].decode("utf-8"), "ERROR -", run)
+                    self.sender(sock, run, status, keep_alive=keep_alive)
+            else:
+                url = suburl[0]
+                if safe_file:
+                    is_binary = safe_file.endswith((".ico", ".png", ".jpg", ".jpeg"))
+                    mode = "rb" if is_binary else "r"
+                    encoding = None if is_binary else "utf-8"
+                    with open(safe_file, mode, encoding=encoding, errors=None if is_binary else "replace") as f:
+                        content = f.read()
+                    self.senderHtml(sock, content, self.status_codes.http_200())
+                elif url in self.router.page_urls:
+                    page_safe = self.safe_static_path("htdocs", self.router.page_urls[url])
+                    if page_safe:
+                        is_binary = page_safe.endswith((".ico", ".png", ".jpg", ".jpeg"))
+                        mode = "rb" if is_binary else "r"
+                        encoding = None if is_binary else "utf-8"
+                        with open(page_safe, mode, encoding=encoding, errors=None if is_binary else "replace") as file:
+                            content = file.read()
+                        self.senderHtml(sock, content, self.status_codes.http_200())
+                    else:
+                        self.senderHtml(sock, '', self.status_codes.http_404())
+                else:
+                    self.senderHtml(sock, '', self.status_codes.http_404())
+            if not keep_alive:
+                try:
+                    self.sel.unregister(sock)
+                    sock.close()
+                except Exception:
+                    pass
+        except Exception:
+            try:
+                self.sel.unregister(sock)
+                sock.close()
+            except Exception:
+                pass
 
     def handle_request_html(self, suburl):
         try:
@@ -865,8 +1017,20 @@ class Server():
             print(err)
 
     # MANEJADOR DE LAS PETICIONES
-    def run(self):
+    def run(self, threads: int = None, ask_for_threads: bool = False):
         try:
+            if threads is not None:
+                self.set_threads(threads)
+            elif ask_for_threads:
+                self.check_ask_for_threads()
+            elif any(arg in ("--ask-threads", "--interactive-threads") for arg in sys.argv):
+                self.check_ask_for_threads()
+            elif any(arg in ("--threads", "-t") or arg.startswith("--threads=") for arg in sys.argv):
+                cli_threads = _resolve_threads(threads=None, ask=False, default=self.__THREADS)
+                if cli_threads != self.__THREADS:
+                    self.set_threads(cli_threads)
+
+            print(f"Starting APY Server on {self.__HOST}:{self.__PORT} with {self.__THREADS} worker thread(s)...")
             self.__METHODS = self.router
             self.__METHODS.add_page(url="swagger", file="swagger.html")
             self.__METHODS.add_page(url="swagger_json", file="swagger.json")
@@ -875,7 +1039,9 @@ class Server():
             swagger_json = swagger.generate_swagger(api_details=self.__METHODS.api_details,
                                                     host=self.__HOST,
                                                     port=self.__PORT)
-            with open('htdocs/swagger.json', 'w') as f:
+            swagger_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'htdocs', 'swagger.json')
+            os.makedirs(os.path.dirname(swagger_path), exist_ok=True)
+            with open(swagger_path, 'w') as f:
                 f.write(swagger_json)
             if self.__SHOW_URLS:
                 for g in self.__METHODS.get_methods.keys():
@@ -900,7 +1066,18 @@ class Server():
                 s.setblocking(False)
                 self.sel.register(s, selectors.EVENT_READ, data=None)
                 while True:
-                    events = self.sel.select(timeout=None)
+                    if self.executor is not None:
+                        while not self.rearm_queue.empty():
+                            try:
+                                rearm_sock, rearm_data = self.rearm_queue.get_nowait()
+                                data = types.SimpleNamespace(addr=rearm_data['addr'], inb=b"", outb=b"")
+                                self.sel.register(rearm_sock, selectors.EVENT_READ | selectors.EVENT_WRITE, data=data)
+                            except Exception:
+                                try:
+                                    rearm_sock.close()
+                                except Exception:
+                                    pass
+                    events = self.sel.select(timeout=0.005 if self.executor is not None else None)
                     for key, mask in events:
                         if key.data is None:
                             self.accept_wrapper(key.fileobj)
@@ -914,3 +1091,15 @@ class Server():
 
 class Request:
     pass
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="MicroFrameworkAPY Server")
+    parser.add_argument("--host", default=os.getenv("APY_HOST", "127.0.0.1"), help="Host address (default: 127.0.0.1)")
+    parser.add_argument("--port", "-p", type=int, default=int(os.getenv("APY_PORT", "4201")), help="Port (default: 4201)")
+    parser.add_argument("--threads", "-t", type=int, default=None, help="Worker threads (default: 4)")
+    parser.add_argument("--ask-threads", action="store_true", help="Ask interactively for number of threads")
+    args, _ = parser.parse_known_args()
+    server_instance = Server(HOST=args.host, PORT=args.port, threads=args.threads, ask_for_threads=args.ask_threads)
+    server_instance.run()

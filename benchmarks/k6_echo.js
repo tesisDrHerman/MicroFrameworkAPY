@@ -2,7 +2,9 @@ import http from 'k6/http';
 import { check } from 'k6';
 
 const VUS = __ENV.VUS ? parseInt(__ENV.VUS, 10) : 100;
-const DURATION = __ENV.DURATION || '150s';
+const WARMUP_DURATION = __ENV.WARMUP || '5s';
+const WARMUP_SECS = parseInt(WARMUP_DURATION, 10) || 5;
+const DURATION = __ENV.DURATION || '25s';
 const METHOD = (__ENV.METHOD || 'GET').toUpperCase();
 const BASE_URL = __ENV.BASE_URL || 'http://127.0.0.1:4201';
 
@@ -11,7 +13,7 @@ export const options = {
     warmup: {
       executor: 'constant-vus',
       vus: Math.min(20, VUS),
-      duration: '30s',
+      duration: `${WARMUP_SECS}s`,
       startTime: '0s',
       tags: { phase: 'warmup' },
     },
@@ -19,7 +21,7 @@ export const options = {
       executor: 'constant-vus',
       vus: VUS,
       duration: DURATION,
-      startTime: '30s',
+      startTime: `${WARMUP_SECS}s`,
       tags: { phase: 'measure' },
     },
   },
